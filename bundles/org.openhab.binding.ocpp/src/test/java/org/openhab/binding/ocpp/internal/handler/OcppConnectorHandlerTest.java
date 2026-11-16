@@ -780,6 +780,52 @@ class OcppConnectorHandlerTest {
     }
 
     @Test
+    void liftingAPauseIsWrittenEvenWhenTheReadSaysTheLimitIsBack() {
+        var reported = new java.util.concurrent.atomic.AtomicReference<java.lang.@org.eclipse.jdt.annotation.Nullable Double>(
+                32.0);
+        OcppChargePointHandler chargePoint = chargerReporting(reported);
+        command(CHANNEL_CHARGE_LIMIT, new DecimalType(32));
+        startTransaction(7);
+        command(CHANNEL_PAUSE, OnOffType.ON);
+        reported.set(0.0);
+        endTransaction(7);
+        reported.set(32.0);
+        clearInvocations(chargePoint);
+
+        command(CHANNEL_PAUSE, OnOffType.OFF);
+
+        assertEquals(32.0, sentLimit(lastProfile(chargePoint)));
+    }
+
+    @Test
+    void raisingA0ALimitIsWrittenEvenWhenTheReadMatches() {
+        var reported = new java.util.concurrent.atomic.AtomicReference<java.lang.@org.eclipse.jdt.annotation.Nullable Double>(
+                5.0);
+        OcppChargePointHandler chargePoint = chargerReporting(reported);
+        command(CHANNEL_CHARGE_LIMIT, new DecimalType(0));
+        reported.set(16.0);
+        clearInvocations(chargePoint);
+
+        command(CHANNEL_CHARGE_LIMIT, new DecimalType(16));
+
+        assertEquals(16.0, sentLimit(lastProfile(chargePoint)));
+    }
+
+    @Test
+    void aLimitAfterALimitIsStillReadBack() {
+        var reported = new java.util.concurrent.atomic.AtomicReference<java.lang.@org.eclipse.jdt.annotation.Nullable Double>(
+                5.0);
+        OcppChargePointHandler chargePoint = chargerReporting(reported);
+        command(CHANNEL_CHARGE_LIMIT, new DecimalType(10));
+        reported.set(16.0);
+        clearInvocations(chargePoint);
+
+        command(CHANNEL_CHARGE_LIMIT, new DecimalType(16));
+
+        verify(chargePoint, never()).send(argThat(r -> r instanceof SetChargingProfileRequest));
+    }
+
+    @Test
     void aChargerThatDeclinesTheReadStillGetsTheWrite() {
         OcppChargePointHandler chargePoint = chargerApplying(null);
 
@@ -924,8 +970,17 @@ class OcppConnectorHandlerTest {
 
     /** A charge point that reports {@code limit} amps in force now, or declines to say when it is null. */
     private OcppChargePointHandler chargerApplying(@org.eclipse.jdt.annotation.Nullable Double limit) {
+        return chargerReporting(
+                new java.util.concurrent.atomic.AtomicReference<java.lang.@org.eclipse.jdt.annotation.Nullable Double>(
+                        limit));
+    }
+
+    /** As {@link #chargerApplying}, with the reported limit read again on every request. */
+    private OcppChargePointHandler chargerReporting(
+            java.util.concurrent.atomic.AtomicReference<java.lang.@org.eclipse.jdt.annotation.Nullable Double> reported) {
         OcppChargePointHandler chargePoint = attachReadyChargePoint();
         when(chargePoint.send(any())).thenAnswer(invocation -> {
+            Double limit = reported.get();
             Request request = invocation.getArgument(0);
             if (request instanceof GetCompositeScheduleRequest) {
                 GetCompositeScheduleConfirmation answer = new GetCompositeScheduleConfirmation(

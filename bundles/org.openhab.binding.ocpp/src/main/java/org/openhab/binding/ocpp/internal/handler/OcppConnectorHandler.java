@@ -172,6 +172,8 @@ public class OcppConnectorHandler extends BaseThingHandler {
     private volatile boolean smartChargingObservedUnsupported;
     // Set once the charger refuses GetCompositeSchedule as a feature; defaults are then written unread.
     private volatile boolean compositeReadUnsupported;
+    // A Wallbox read just after a paused charge ended reported 32 A while it kept the 0 A, so a lift is always sent.
+    private volatile boolean stopOnCharger;
 
     // Dedicated lock: the base class synchronizes on the handler monitor.
     private final Object lock = new Object();
@@ -724,7 +726,7 @@ public class OcppConnectorHandler extends BaseThingHandler {
         eu.chargetime.ocpp.model.Request read = persistsDefault() && !compositeReadUnsupported
                 ? commands.readCompositeSchedule(connectorId, inWatts)
                 : null;
-        if (read == null) {
+        if (read == null || liftsAStop(claim)) {
             setProfile(claim);
             return;
         }
@@ -748,6 +750,10 @@ public class OcppConnectorHandler extends BaseThingHandler {
             }
             setProfile(claim);
         });
+    }
+
+    private boolean liftsAStop(ProfileClaim claim) {
+        return claim.wireValue() > 0 && (stopOnCharger || isRememberedStop());
     }
 
     /** OCPP 1.6 carries one decimal, and an unstated phase count means three. */
@@ -869,6 +875,7 @@ public class OcppConnectorHandler extends BaseThingHandler {
             publish(CHANNEL_NUMBER_PHASES, new DecimalType(phaseCount));
         }
         publish(CHANNEL_PAUSE, OnOffType.from(claim.paused()));
+        stopOnCharger = claim.paused() || claim.wireValue() == 0;
     }
 
     private void clearProfile(ProfileClaim claim) {
@@ -881,6 +888,7 @@ public class OcppConnectorHandler extends BaseThingHandler {
                             publish(CHANNEL_CHARGE_LIMIT, UnDefType.UNDEF);
                             publish(CHANNEL_POWER_LIMIT, UnDefType.UNDEF);
                             publish(CHANNEL_PAUSE, OnOffType.OFF);
+                            stopOnCharger = false;
                             rememberPersistedStop(false);
                         } else {
                             logger.debug("Stale ClearChargingProfile confirmation on connector {} ignored",
