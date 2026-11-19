@@ -672,6 +672,28 @@ class OcppConnectorHandlerTest {
         assertEquals(0.0, sentLimit(sent));
     }
 
+    /**
+     * Two connectors on ChargePointMaxProfile would overwrite each other's cap, and a clear-limit on one would clear
+     * both: the second sends nothing at all, and its channels say it holds no limit.
+     */
+    @Test
+    void aSecondChargePointMaxConnectorOnTheSameChargerSendsNothing() {
+        OcppChargePointHandler chargePoint = attachChargePointMax();
+        when(chargePoint.otherChargePointMaxConnector(org.mockito.ArgumentMatchers.anyInt())).thenReturn(1);
+        startTransaction(7);
+        clearInvocations(chargePoint, callback);
+
+        command(CHANNEL_CHARGE_LIMIT, new DecimalType(10));
+        command(CHANNEL_POWER_LIMIT, new DecimalType(4000));
+        command(CHANNEL_PAUSE, OnOffType.ON);
+        command(CHANNEL_CLEAR_LIMIT, OnOffType.ON);
+
+        verify(chargePoint, never()).send(argThat(r -> r instanceof SetChargingProfileRequest));
+        verify(chargePoint, never()).send(argThat(r -> r instanceof ClearChargingProfileRequest));
+        verify(callback, org.mockito.Mockito.atLeastOnce())
+                .stateUpdated(eq(new ChannelUID(THING_UID, CHANNEL_CHARGE_LIMIT)), eq(UnDefType.UNDEF));
+    }
+
     private OcppChargePointHandler attachChargePointMax() {
         when(thing.getConfiguration()).thenReturn(new org.openhab.core.config.core.Configuration(
                 java.util.Map.of("profilePurpose", "ChargePointMaxProfile")));

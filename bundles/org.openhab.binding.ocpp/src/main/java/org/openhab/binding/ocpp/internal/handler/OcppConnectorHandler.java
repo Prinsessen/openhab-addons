@@ -136,6 +136,7 @@ public class OcppConnectorHandler extends BaseThingHandler {
     // TxProfile/TxDefaultProfile and never apply it during a charge.
     private volatile boolean chargePointMax;
     private volatile boolean stopRefusalLogged;
+    private volatile boolean secondCapLogged;
     // The last limit the charger accepted, so a refused stop can put the channels back to it.
     private volatile @Nullable ProfileClaim lastAccepted;
     private volatile boolean disableSmartCharging;
@@ -216,6 +217,7 @@ public class OcppConnectorHandler extends BaseThingHandler {
         forceTxDefaultProfile = config.forceTxDefaultProfile;
         chargePointMax = PURPOSE_CHARGE_POINT_MAX.equalsIgnoreCase(config.profilePurpose.trim());
         stopRefusalLogged = false;
+        secondCapLogged = false;
         lastAccepted = null;
         if (chargePointMax) {
             logger.info("Connector {} sends its charge cap as a ChargePointMaxProfile on connector 0", connectorId);
@@ -255,6 +257,10 @@ public class OcppConnectorHandler extends BaseThingHandler {
             requestStatus();
             onChargePointReady();
         }
+    }
+
+    public boolean sendsChargePointMax() {
+        return chargePointMax;
     }
 
     public String getExternalEnergyItem() {
@@ -718,6 +724,14 @@ public class OcppConnectorHandler extends BaseThingHandler {
             // passing through applyLimit() at all.
             return;
         }
+        if (chargePointMax) {
+            OcppChargePointHandler cp = chargePoint;
+            int holder = cp != null ? cp.otherChargePointMaxConnector(connectorId) : 0;
+            if (holder != 0) {
+                refuseSecondCap(claim, holder);
+                return;
+            }
+        }
         if (transactionId != null && !forceTxDefaultProfile && !chargePointMax) {
             limitHeldByTxProfile = true;
         }
@@ -949,6 +963,32 @@ public class OcppConnectorHandler extends BaseThingHandler {
             publish(CHANNEL_POWER_LIMIT, UnDefType.UNDEF);
             publish(CHANNEL_PAUSE, OnOffType.OFF);
         }
+    }
+
+    /**
+     * A second connector set to ChargePointMaxProfile on the same charger would overwrite the first one's cap, and
+     * its clear-limit would clear both. Nothing it sends goes out: the lower connector keeps the cap, this one's
+     * channels say it has none, and the log says to set the mode on one connector only.
+     */
+    private void refuseSecondCap(ProfileClaim claim, int holder) {
+        if (!claimPublication(claim)) {
+            return;
+        }
+        if (!secondCapLogged) {
+            secondCapLogged = true;
+            logger.warn("Connectors {} and {} are both set to profilePurpose ChargePointMaxProfile, but a charger has "
+                    + "one such cap: connector {} keeps it and connector {} sends no limit. Set it on one connector "
+                    + "only.", holder, connectorId, holder, connectorId);
+        } else {
+            logger.debug("Connector {}: limit not sent, connector {} holds the ChargePointMaxProfile", connectorId,
+                    holder);
+        }
+        paused = false;
+        currentLimitAmps = Double.NaN;
+        powerLimitWatts = Double.NaN;
+        publish(CHANNEL_CHARGE_LIMIT, UnDefType.UNDEF);
+        publish(CHANNEL_POWER_LIMIT, UnDefType.UNDEF);
+        publish(CHANNEL_PAUSE, OnOffType.OFF);
     }
 
     private void clearProfile(ProfileClaim claim) {
